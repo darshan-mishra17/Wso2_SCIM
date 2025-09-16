@@ -1,5 +1,5 @@
 // server.js
-// Node.js Express server for integrating Frappe HR with WSO2 Asgardeo SCIM provisioning
+// Node.js Express server for integrating Frappe HR with WSO2 Identity Server 7.0.0 SCIM provisioning
 
 require('dotenv').config();
 const express = require('express');
@@ -9,27 +9,34 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const ASGARDEO_TENANT = process.env.ASGARDEO_TENANT;
-const ASGARDEO_CLIENT_ID = process.env.ASGARDEO_CLIENT_ID;
-const ASGARDEO_CLIENT_SECRET = process.env.ASGARDEO_CLIENT_SECRET;
+const WSO2_IS_HOST = process.env.WSO2_IS_HOST;
+const WSO2_IS_PORT = process.env.WSO2_IS_PORT || '9443';
+const WSO2_IS_CLIENT_ID = process.env.WSO2_IS_CLIENT_ID;
+const WSO2_IS_CLIENT_SECRET = process.env.WSO2_IS_CLIENT_SECRET;
+const WSO2_IS_USERNAME = process.env.WSO2_IS_USERNAME;
+const WSO2_IS_PASSWORD = process.env.WSO2_IS_PASSWORD;
 
-// Helper: Get Asgardeo SCIM base URL
-const SCIM_BASE_URL = `https://api.asgardeo.io/t/${ASGARDEO_TENANT}/scim2/Users`;
+// Helper: Get WSO2 IS SCIM base URL
+const SCIM_BASE_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/scim2/Users`;
 
-// Helper: Get Asgardeo OAuth2 token endpoint
-const TOKEN_URL = `https://api.asgardeo.io/t/${ASGARDEO_TENANT}/oauth2/token`;
+// Helper: Get WSO2 IS OAuth2 token endpoint
+const TOKEN_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/oauth2/token`;
 
 // Helper: Create Basic Auth header for client credentials
 function getBasicAuthHeader() {
-    const creds = `${ASGARDEO_CLIENT_ID}:${ASGARDEO_CLIENT_SECRET}`;
+    const creds = `${WSO2_IS_CLIENT_ID}:${WSO2_IS_CLIENT_SECRET}`;
     return 'Basic ' + Buffer.from(creds).toString('base64');
 }
 
-// 1. Asgardeo Authentication: Get OAuth2 access token
+// 1. WSO2 IS Authentication: Get OAuth2 access token
 async function getAccessToken() {
     try {
         const params = new URLSearchParams();
-        params.append('grant_type', 'client_credentials');
+        params.append('grant_type', 'password');
+        params.append('username', WSO2_IS_USERNAME);
+        params.append('password', WSO2_IS_PASSWORD);
+        params.append('scope', 'internal_user_mgt_create internal_user_mgt_update internal_user_mgt_view internal_user_mgt_delete');
+        
         const response = await axios.post(
             TOKEN_URL,
             params,
@@ -38,11 +45,15 @@ async function getAccessToken() {
                     'Content-Type': 'application/x-www-form-urlencoded',
                     'Authorization': getBasicAuthHeader(),
                 },
+                // Disable SSL verification for development (remove in production)
+                httpsAgent: new (require('https').Agent)({
+                    rejectUnauthorized: false
+                })
             }
         );
         return response.data.access_token;
     } catch (error) {
-        console.error('Error fetching Asgardeo access token:', error.response?.data || error.message);
+        console.error('Error fetching WSO2 IS access token:', error.response?.data || error.message);
         throw error;
     }
 }
@@ -60,10 +71,14 @@ app.post('/webhook-receiver', async (req, res) => {
     const userEmail = body.user_id;
     try {
         const accessToken = await getAccessToken();
-        // Search for user in Asgardeo SCIM
+        // Search for user in WSO2 IS SCIM
         const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
         const searchResp = await axios.get(searchUrl, {
-            headers: { 'Authorization': `Bearer ${accessToken}` }
+            headers: { 'Authorization': `Bearer ${accessToken}` },
+            // Disable SSL verification for development (remove in production)
+            httpsAgent: new (require('https').Agent)({
+                rejectUnauthorized: false
+            })
         });
         const userExists = searchResp.data.totalResults > 0;
         const userId = userExists ? searchResp.data.Resources[0].id : null;
@@ -87,6 +102,10 @@ app.post('/webhook-receiver', async (req, res) => {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json',
                         },
+                        // Disable SSL verification for development (remove in production)
+                        httpsAgent: new (require('https').Agent)({
+                            rejectUnauthorized: false
+                        })
                     });
                     console.log(`User created: ${userEmail}`);
                     return res.status(201).json({ message: 'User created' });
@@ -113,6 +132,10 @@ app.post('/webhook-receiver', async (req, res) => {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json',
                         },
+                        // Disable SSL verification for development (remove in production)
+                        httpsAgent: new (require('https').Agent)({
+                            rejectUnauthorized: false
+                        })
                     });
                     console.log(`User updated: ${userEmail}`);
                     return res.status(200).json({ message: 'User updated' });
@@ -128,7 +151,11 @@ app.post('/webhook-receiver', async (req, res) => {
             }
             try {
                 await axios.delete(`${SCIM_BASE_URL}/${userId}`, {
-                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                    headers: { 'Authorization': `Bearer ${accessToken}` },
+                    // Disable SSL verification for development (remove in production)
+                    httpsAgent: new (require('https').Agent)({
+                        rejectUnauthorized: false
+                    })
                 });
                 console.log(`User deleted: ${userEmail}`);
                 return res.status(200).json({ message: 'User deleted' });
