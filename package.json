@@ -1,7 +1,7 @@
 {
-  "name": "wso2-is-scim-server",
+  "name": "asgardeo-scim-server",
   "version": "1.0.0",
-  "description": "Node.js Express server for integrating Frappe HR with WSO2 Identity Server 7.0.0 SCIM provisioning",
+  "description": "Node.js Express server for integrating Frappe HR with Asgardeo SCIM provisioning",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

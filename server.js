@@ -1,5 +1,5 @@
 // server.js
-// Node.js Express server for integrating Frappe HR with WSO2 Identity Server 7.0.0 SCIM provisioning
+// Node.js Express server for integrating Frappe HR with WSO2 Asgardeo SCIM provisioning
 
 require('dotenv').config();
 const express = require('express');
@@ -9,81 +9,42 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const WSO2_IS_HOST = process.env.WSO2_IS_HOST;
-const WSO2_IS_PORT = process.env.WSO2_IS_PORT || '9443';
-const WSO2_IS_CLIENT_ID = process.env.WSO2_IS_CLIENT_ID;
-const WSO2_IS_CLIENT_SECRET = process.env.WSO2_IS_CLIENT_SECRET;
+const ASGARDEO_TENANT = process.env.ASGARDEO_TENANT;
+const ASGARDEO_CLIENT_ID = process.env.ASGARDEO_CLIENT_ID;
+const ASGARDEO_CLIENT_SECRET = process.env.ASGARDEO_CLIENT_SECRET;
 
-// Helper: Get WSO2 IS SCIM base URL
-const SCIM_BASE_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/scim2/Users`;
+// Helper: Get Asgardeo SCIM base URL
+const SCIM_BASE_URL = `https://api.asgardeo.io/t/${ASGARDEO_TENANT}/scim2/Users`;
 
-// Helper: Get WSO2 IS OAuth2 token endpoint  
-const TOKEN_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/oauth2/token`;
-
-// Alternative endpoints for different WSO2 IS configurations
-const ALT_TOKEN_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/t/carbon.super/oauth2/token`;
-const ALT_SCIM_BASE_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/t/carbon.super/scim2/Users`;
+// Helper: Get Asgardeo OAuth2 token endpoint
+const TOKEN_URL = `https://api.asgardeo.io/t/${ASGARDEO_TENANT}/oauth2/token`;
 
 // Helper: Create Basic Auth header for client credentials
 function getBasicAuthHeader() {
-    const creds = `${WSO2_IS_CLIENT_ID}:${WSO2_IS_CLIENT_SECRET}`;
+    const creds = `${ASGARDEO_CLIENT_ID}:${ASGARDEO_CLIENT_SECRET}`;
     return 'Basic ' + Buffer.from(creds).toString('base64');
 }
 
-// 1. WSO2 IS Authentication: Get OAuth2 access token
+// 1. Asgardeo Authentication: Get OAuth2 access token
 async function getAccessToken() {
-    const urls = [TOKEN_URL, ALT_TOKEN_URL];
-    
-    for (const url of urls) {
-        try {
-            const params = new URLSearchParams();
-            params.append('grant_type', 'client_credentials');
-            // Try different scope formats
-            const scopes = [
-                'internal_user_mgt_view internal_user_mgt_create internal_user_mgt_update internal_user_mgt_delete',
-                'SYSTEM',
-                'openid'
-            ];
-            
-            for (const scope of scopes) {
-                try {
-                    params.set('scope', scope);
-                    console.log(`Attempting to get token from: ${url} with scope: ${scope}`);
-                    
-                    const response = await axios.post(
-                        url,
-                        params,
-                        {
-                            headers: {
-                                'Content-Type': 'application/x-www-form-urlencoded',
-                                'Authorization': getBasicAuthHeader(),
-                            },
-                            // Disable SSL verification for development (remove in production)
-                            httpsAgent: new (require('https').Agent)({
-                                rejectUnauthorized: false
-                            }),
-                            timeout: 10000 // 10 second timeout
-                        }
-                    );
-                    console.log('Successfully obtained access token');
-                    return response.data.access_token;
-                } catch (scopeError) {
-                    console.log(`Failed with scope ${scope}:`, scopeError.response?.status, scopeError.response?.statusText);
-                    continue;
-                }
+    try {
+        const params = new URLSearchParams();
+        params.append('grant_type', 'client_credentials');
+        const response = await axios.post(
+            TOKEN_URL,
+            params,
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': getBasicAuthHeader(),
+                },
             }
-        } catch (error) {
-            console.error(`Error with URL ${url}:`, error.response?.status, error.response?.statusText);
-            continue;
-        }
+        );
+        return response.data.access_token;
+    } catch (error) {
+        console.error('Error fetching Asgardeo access token:', error.response?.data || error.message);
+        throw error;
     }
-    
-    // If all attempts failed, throw detailed error
-    throw new Error('Failed to obtain access token from all endpoints and scope combinations. Please check:\n' +
-        '1. WSO2 IS is running and accessible\n' +
-        '2. Service Provider is configured with OAuth/OpenID Connect\n' +
-        '3. Client credentials are correct\n' +
-        '4. Required scopes are assigned to the Service Provider');
 }
 
 // 2. Webhook endpoint for Frappe HR events
@@ -99,20 +60,11 @@ app.post('/webhook-receiver', async (req, res) => {
     const userEmail = body.user_id;
     try {
         const accessToken = await getAccessToken();
-        // Search for user in WSO2 IS SCIM
+        // Search for user in Asgardeo SCIM
         const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
-        console.log(`Searching for user: ${userEmail} at ${searchUrl}`);
-        
         const searchResp = await axios.get(searchUrl, {
-            headers: { 'Authorization': `Bearer ${accessToken}` },
-            // Disable SSL verification for development (remove in production)
-            httpsAgent: new (require('https').Agent)({
-                rejectUnauthorized: false
-            }),
-            timeout: 10000 // 10 second timeout
+            headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        
-        console.log(`Search response: ${searchResp.data.totalResults} users found`);
         const userExists = searchResp.data.totalResults > 0;
         const userId = userExists ? searchResp.data.Resources[0].id : null;
 
@@ -135,10 +87,6 @@ app.post('/webhook-receiver', async (req, res) => {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json',
                         },
-                        // Disable SSL verification for development (remove in production)
-                        httpsAgent: new (require('https').Agent)({
-                            rejectUnauthorized: false
-                        })
                     });
                     console.log(`User created: ${userEmail}`);
                     return res.status(201).json({ message: 'User created' });
@@ -165,10 +113,6 @@ app.post('/webhook-receiver', async (req, res) => {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json',
                         },
-                        // Disable SSL verification for development (remove in production)
-                        httpsAgent: new (require('https').Agent)({
-                            rejectUnauthorized: false
-                        })
                     });
                     console.log(`User updated: ${userEmail}`);
                     return res.status(200).json({ message: 'User updated' });
@@ -184,11 +128,7 @@ app.post('/webhook-receiver', async (req, res) => {
             }
             try {
                 await axios.delete(`${SCIM_BASE_URL}/${userId}`, {
-                    headers: { 'Authorization': `Bearer ${accessToken}` },
-                    // Disable SSL verification for development (remove in production)
-                    httpsAgent: new (require('https').Agent)({
-                        rejectUnauthorized: false
-                    })
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
                 });
                 console.log(`User deleted: ${userEmail}`);
                 return res.status(200).json({ message: 'User deleted' });
