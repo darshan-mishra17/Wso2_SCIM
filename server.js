@@ -13,14 +13,16 @@ const WSO2_IS_HOST = process.env.WSO2_IS_HOST;
 const WSO2_IS_PORT = process.env.WSO2_IS_PORT || '9443';
 const WSO2_IS_CLIENT_ID = process.env.WSO2_IS_CLIENT_ID;
 const WSO2_IS_CLIENT_SECRET = process.env.WSO2_IS_CLIENT_SECRET;
-const WSO2_IS_USERNAME = process.env.WSO2_IS_USERNAME;
-const WSO2_IS_PASSWORD = process.env.WSO2_IS_PASSWORD;
 
 // Helper: Get WSO2 IS SCIM base URL
 const SCIM_BASE_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/scim2/Users`;
 
-// Helper: Get WSO2 IS OAuth2 token endpoint
+// Helper: Get WSO2 IS OAuth2 token endpoint  
 const TOKEN_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/oauth2/token`;
+
+// Alternative endpoints for different WSO2 IS configurations
+const ALT_TOKEN_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/t/carbon.super/oauth2/token`;
+const ALT_SCIM_BASE_URL = `https://${WSO2_IS_HOST}:${WSO2_IS_PORT}/t/carbon.super/scim2/Users`;
 
 // Helper: Create Basic Auth header for client credentials
 function getBasicAuthHeader() {
@@ -30,32 +32,58 @@ function getBasicAuthHeader() {
 
 // 1. WSO2 IS Authentication: Get OAuth2 access token
 async function getAccessToken() {
-    try {
-        const params = new URLSearchParams();
-        params.append('grant_type', 'password');
-        params.append('username', WSO2_IS_USERNAME);
-        params.append('password', WSO2_IS_PASSWORD);
-        params.append('scope', 'internal_user_mgt_create internal_user_mgt_update internal_user_mgt_view internal_user_mgt_delete');
-        
-        const response = await axios.post(
-            TOKEN_URL,
-            params,
-            {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': getBasicAuthHeader(),
-                },
-                // Disable SSL verification for development (remove in production)
-                httpsAgent: new (require('https').Agent)({
-                    rejectUnauthorized: false
-                })
+    const urls = [TOKEN_URL, ALT_TOKEN_URL];
+    
+    for (const url of urls) {
+        try {
+            const params = new URLSearchParams();
+            params.append('grant_type', 'client_credentials');
+            // Try different scope formats
+            const scopes = [
+                'internal_user_mgt_view internal_user_mgt_create internal_user_mgt_update internal_user_mgt_delete',
+                'SYSTEM',
+                'openid'
+            ];
+            
+            for (const scope of scopes) {
+                try {
+                    params.set('scope', scope);
+                    console.log(`Attempting to get token from: ${url} with scope: ${scope}`);
+                    
+                    const response = await axios.post(
+                        url,
+                        params,
+                        {
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                                'Authorization': getBasicAuthHeader(),
+                            },
+                            // Disable SSL verification for development (remove in production)
+                            httpsAgent: new (require('https').Agent)({
+                                rejectUnauthorized: false
+                            }),
+                            timeout: 10000 // 10 second timeout
+                        }
+                    );
+                    console.log('Successfully obtained access token');
+                    return response.data.access_token;
+                } catch (scopeError) {
+                    console.log(`Failed with scope ${scope}:`, scopeError.response?.status, scopeError.response?.statusText);
+                    continue;
+                }
             }
-        );
-        return response.data.access_token;
-    } catch (error) {
-        console.error('Error fetching WSO2 IS access token:', error.response?.data || error.message);
-        throw error;
+        } catch (error) {
+            console.error(`Error with URL ${url}:`, error.response?.status, error.response?.statusText);
+            continue;
+        }
     }
+    
+    // If all attempts failed, throw detailed error
+    throw new Error('Failed to obtain access token from all endpoints and scope combinations. Please check:\n' +
+        '1. WSO2 IS is running and accessible\n' +
+        '2. Service Provider is configured with OAuth/OpenID Connect\n' +
+        '3. Client credentials are correct\n' +
+        '4. Required scopes are assigned to the Service Provider');
 }
 
 // 2. Webhook endpoint for Frappe HR events
@@ -73,13 +101,18 @@ app.post('/webhook-receiver', async (req, res) => {
         const accessToken = await getAccessToken();
         // Search for user in WSO2 IS SCIM
         const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
+        console.log(`Searching for user: ${userEmail} at ${searchUrl}`);
+        
         const searchResp = await axios.get(searchUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` },
             // Disable SSL verification for development (remove in production)
             httpsAgent: new (require('https').Agent)({
                 rejectUnauthorized: false
-            })
+            }),
+            timeout: 10000 // 10 second timeout
         });
+        
+        console.log(`Search response: ${searchResp.data.totalResults} users found`);
         const userExists = searchResp.data.totalResults > 0;
         const userId = userExists ? searchResp.data.Resources[0].id : null;
 
