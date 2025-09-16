@@ -7,6 +7,7 @@ const axios = require('axios');
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Add support for form-encoded data
 
 const PORT = process.env.PORT || 3000;
 const ASGARDEO_TENANT = process.env.ASGARDEO_TENANT;
@@ -122,10 +123,93 @@ app.get('/test-scim', async (req, res) => {
     }
 });
 
+// Search for a specific user
+app.get('/search-user/:email', async (req, res) => {
+    try {
+        const userEmail = req.params.email;
+        console.log(`🔍 Searching for user: ${userEmail}`);
+        
+        const accessToken = await getAccessToken();
+        const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
+        
+        const response = await axios.get(searchUrl, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        if (response.data.totalResults > 0) {
+            const user = response.data.Resources[0];
+            res.json({
+                found: true,
+                user: {
+                    id: user.id,
+                    userName: user.userName,
+                    name: user.name,
+                    emails: user.emails,
+                    active: user.active,
+                    created: user.meta?.created,
+                    lastModified: user.meta?.lastModified
+                }
+            });
+        } else {
+            res.json({
+                found: false,
+                message: `User ${userEmail} not found`
+            });
+        }
+        
+    } catch (error) {
+        console.error('❌ User search failed:', error.response?.data);
+        res.status(error.response?.status || 500).json({
+            error: 'Search failed',
+            details: error.response?.data
+        });
+    }
+});
+
+// List all users (for debugging)
+app.get('/list-all-users', async (req, res) => {
+    try {
+        console.log('📋 Listing all users...');
+        const accessToken = await getAccessToken();
+        
+        const response = await axios.get(`${SCIM_BASE_URL}?count=50`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const users = response.data.Resources.map(user => ({
+            id: user.id,
+            userName: user.userName,
+            name: user.name,
+            emails: user.emails,
+            active: user.active,
+            created: user.meta?.created
+        }));
+        
+        res.json({
+            totalUsers: response.data.totalResults,
+            users: users
+        });
+        
+    } catch (error) {
+        console.error('❌ Failed to list users:', error.response?.data);
+        res.status(error.response?.status || 500).json({
+            error: 'Failed to list users',
+            details: error.response?.data
+        });
+    }
+});
+
 // 2. Webhook endpoint for Frappe HR events
 app.post('/webhook-receiver', async (req, res) => {
     const eventType = req.header('x-frappe-event-type');
     const body = req.body;
+    
+    // Log incoming request for debugging
+    console.log('📨 Incoming webhook:');
+    console.log('Headers:', req.headers);
+    console.log('Body:', body);
+    console.log('Content-Type:', req.header('content-type'));
+    
     if (!eventType) {
         return res.status(400).json({ error: 'Missing x-frappe-event-type header' });
     }
