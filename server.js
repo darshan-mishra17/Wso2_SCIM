@@ -529,7 +529,7 @@ app.get('/check-user/:email', async (req, res) => {
 });
 
 // 2. Webhook endpoint for Frappe HR events
-app.post('/webhook-receiver', async (req, res) => {
+app.post('/frappe-webhook', async (req, res) => {
     const eventType = req.header('x-frappe-event-type');
     const body = req.body;
     
