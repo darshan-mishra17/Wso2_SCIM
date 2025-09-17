@@ -123,45 +123,47 @@ app.get('/test-scim', async (req, res) => {
     }
 });
 
-// Search for a specific user
-app.get('/search-user/:email', async (req, res) => {
+// Detailed diagnostic endpoint
+app.get('/debug-users', async (req, res) => {
     try {
-        const userEmail = req.params.email;
-        console.log(`🔍 Searching for user: ${userEmail}`);
-        
+        console.log('🔍 Running detailed user diagnostics...');
         const accessToken = await getAccessToken();
-        const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
         
-        const response = await axios.get(searchUrl, {
+        // Get all users with full details
+        const allUsersUrl = `${SCIM_BASE_URL}?count=100`;
+        console.log(`Fetching all users from: ${allUsersUrl}`);
+        
+        const response = await axios.get(allUsersUrl, {
             headers: { 'Authorization': `Bearer ${accessToken}` }
         });
         
-        if (response.data.totalResults > 0) {
-            const user = response.data.Resources[0];
-            res.json({
-                found: true,
-                user: {
-                    id: user.id,
-                    userName: user.userName,
-                    name: user.name,
-                    emails: user.emails,
-                    active: user.active,
-                    created: user.meta?.created,
-                    lastModified: user.meta?.lastModified
-                }
-            });
-        } else {
-            res.json({
-                found: false,
-                message: `User ${userEmail} not found`
-            });
-        }
+        const users = response.data.Resources || [];
+        const userList = users.map(user => ({
+            id: user.id,
+            userName: user.userName,
+            name: user.name,
+            emails: user.emails,
+            active: user.active,
+            created: user.meta?.created,
+            lastModified: user.meta?.lastModified
+        }));
+        
+        res.json({
+            success: true,
+            totalFromAPI: response.data.totalResults,
+            actualReturned: users.length,
+            users: userList,
+            searchedEmail: 'mishradarshan22@gmail.com',
+            foundTarget: users.find(u => u.userName === 'mishradarshan22@gmail.com') || null,
+            scimEndpoint: SCIM_BASE_URL
+        });
         
     } catch (error) {
-        console.error('❌ User search failed:', error.response?.data);
+        console.error('❌ Debug failed:', error.response?.data);
         res.status(error.response?.status || 500).json({
-            error: 'Search failed',
-            details: error.response?.data
+            error: 'Debug failed',
+            details: error.response?.data,
+            status: error.response?.status
         });
     }
 });
@@ -195,6 +197,64 @@ app.get('/list-all-users', async (req, res) => {
         res.status(error.response?.status || 500).json({
             error: 'Failed to list users',
             details: error.response?.data
+        });
+    }
+});
+
+// Test user creation endpoint
+app.post('/test-create-user', async (req, res) => {
+    try {
+        console.log('🧪 Testing user creation...');
+        const accessToken = await getAccessToken();
+        
+        const testUser = {
+            userName: 'test.user@example.com',
+            name: {
+                givenName: 'Test',
+                familyName: 'User',
+            },
+            emails: [{ primary: true, value: 'test.user@example.com', type: 'work' }],
+            active: true
+        };
+        
+        console.log('📋 Creating test user:', testUser);
+        
+        const createResponse = await axios.post(SCIM_BASE_URL, testUser, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        
+        console.log('✅ User creation response:', createResponse.status, createResponse.data);
+        
+        // Immediately check if user exists
+        const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"test.user@example.com\"`;
+        const searchResponse = await axios.get(searchUrl, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        res.json({
+            success: true,
+            created: true,
+            createResponse: {
+                status: createResponse.status,
+                data: createResponse.data
+            },
+            verification: {
+                found: searchResponse.data.totalResults > 0,
+                searchResults: searchResponse.data.totalResults,
+                userData: searchResponse.data.Resources?.[0] || null
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Test user creation failed:', error.response?.data);
+        res.status(error.response?.status || 500).json({
+            success: false,
+            error: 'Test creation failed',
+            details: error.response?.data,
+            status: error.response?.status
         });
     }
 });
