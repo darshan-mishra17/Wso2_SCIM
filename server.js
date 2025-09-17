@@ -273,10 +273,29 @@ app.post('/webhook-receiver', async (req, res) => {
     if (!eventType) {
         return res.status(400).json({ error: 'Missing x-frappe-event-type header' });
     }
-    if (!body || !body.user_id) {
-        return res.status(400).json({ error: 'Missing user_id in request body' });
+    
+    // Enhanced validation for user_id
+    if (!body || !body.user_id || body.user_id === 'None' || body.user_id === null || body.user_id === '') {
+        console.error('❌ Invalid user_id:', body?.user_id);
+        return res.status(400).json({ 
+            error: 'Invalid or missing user_id in request body',
+            received: body?.user_id,
+            suggestion: 'Ensure the Employee record has a valid email address linked'
+        });
     }
+    
     const userEmail = body.user_id;
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(userEmail)) {
+        console.error('❌ Invalid email format:', userEmail);
+        return res.status(400).json({ 
+            error: 'Invalid email format for user_id',
+            received: userEmail,
+            suggestion: 'user_id must be a valid email address'
+        });
+    }
     try {
         const accessToken = await getAccessToken();
         
