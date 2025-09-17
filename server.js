@@ -88,6 +88,160 @@ async function getAccessToken() {
     }
 }
 
+// Comprehensive SCIM2 user creation function that handles various tenant configurations
+async function createUserViaSCIM2(userDetails, options = {}) {
+    const {
+        email,
+        firstName = '',
+        lastName = '',
+        password = 'TempPass123!@#',
+        active = true,
+        maxRetries = 3,
+        retryDelay = 2000
+    } = userDetails;
+    
+    const {
+        waitForCreation = true,
+        checkMultipleTimes = true
+    } = options;
+    
+    console.log(`🚀 Starting comprehensive SCIM2 user creation for: ${email}`);
+    
+    try {
+        const accessToken = await getAccessToken();
+        
+        // Enhanced SCIM2 user payload with all possible schemas and configurations
+        const scimUser = {
+            schemas: [
+                "urn:ietf:params:scim:schemas:core:2.0:User",
+                "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+            ],
+            userName: email,
+            password: password,
+            name: {
+                givenName: firstName,
+                familyName: lastName,
+                formatted: `${firstName} ${lastName}`.trim()
+            },
+            emails: [{ 
+                primary: true, 
+                value: email, 
+                type: 'work' 
+            }],
+            active: active,
+            // Enterprise schema with comprehensive settings
+            "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+                "askPassword": false,      // Don't force password reset
+                "verifyEmail": false,      // Don't require email verification
+                "accountLocked": false     // Don't lock account
+            }
+        };
+        
+        console.log('📋 Creating user with comprehensive SCIM2 payload...');
+        
+        // Create the user
+        const createResponse = await axios.post(SCIM_BASE_URL, scimUser, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        
+        console.log(`✅ SCIM2 Create Response Status: ${createResponse.status}`);
+        console.log(`📄 SCIM2 Response Data:`, createResponse.data ? JSON.stringify(createResponse.data, null, 2) : 'Empty response');
+        
+        if (!waitForCreation) {
+            return {
+                success: true,
+                status: createResponse.status,
+                message: 'User creation request submitted',
+                response: createResponse.data
+            };
+        }
+        
+        // Verification with retry logic for different tenant configurations
+        console.log('🔍 Starting user verification with retry logic...');
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            console.log(`🔄 Verification attempt ${attempt}/${maxRetries}`);
+            
+            try {
+                const verifyResponse = await axios.get(`${SCIM_BASE_URL}?filter=userName eq "${email}"`, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+                
+                const userExists = verifyResponse.data.totalResults > 0;
+                const userData = userExists ? verifyResponse.data.Resources[0] : null;
+                
+                if (userExists) {
+                    console.log('🎉 User successfully created and verified!');
+                    console.log('👤 User details:', JSON.stringify(userData, null, 2));
+                    
+                    return {
+                        success: true,
+                        status: createResponse.status,
+                        message: 'User created and verified successfully',
+                        user: userData,
+                        createResponse: createResponse.data,
+                        verification: {
+                            attempts: attempt,
+                            found: true
+                        }
+                    };
+                }
+                
+                console.log(`⏳ User not found yet (attempt ${attempt}). Waiting ${retryDelay}ms before retry...`);
+                
+                if (attempt < maxRetries) {
+                    await new Promise(resolve => setTimeout(resolve, retryDelay));
+                }
+                
+            } catch (verifyError) {
+                console.error(`❌ Verification attempt ${attempt} failed:`, verifyError.response?.data);
+                if (attempt === maxRetries) {
+                    throw verifyError;
+                }
+            }
+        }
+        
+        // If we get here, user wasn't found after all retries
+        console.log('⚠️ User creation accepted but user not found after all verification attempts');
+        
+        return {
+            success: false,
+            status: createResponse.status,
+            message: `User creation accepted (${createResponse.status}) but user not found after ${maxRetries} verification attempts`,
+            createResponse: createResponse.data,
+            verification: {
+                attempts: maxRetries,
+                found: false,
+                possibleCauses: [
+                    'Tenant has "Lock account until password is set" enabled',
+                    'Email verification required before user becomes active',
+                    'Admin approval required for new users',
+                    'Domain restrictions preventing user creation'
+                ]
+            }
+        };
+        
+    } catch (error) {
+        console.error('❌ SCIM2 user creation failed:', error.response?.data || error.message);
+        
+        return {
+            success: false,
+            error: 'SCIM2 user creation failed',
+            details: error.response?.data || error.message,
+            status: error.response?.status,
+            troubleshooting: {
+                '401': 'Authentication failed - check client credentials',
+                '403': 'Permission denied - ensure SCIM2 Users API access is granted',
+                '409': 'User already exists with this email',
+                '422': 'Validation failed - check required fields and password policy'
+            }[error.response?.status] || 'Unknown error occurred'
+        };
+    }
+}
+
 // Test endpoint to debug SCIM access
 app.get('/test-scim', async (req, res) => {
     try {
@@ -184,30 +338,78 @@ app.post('/test-invite-user', async (req, res) => {
     }
 });
 
-// Test SCIM user creation with password (required by Asgardeo)
-app.post('/test-scim-create', async (req, res) => {
+// Test comprehensive SCIM2 user creation with retry logic
+app.post('/test-comprehensive-scim', async (req, res) => {
     try {
-        console.log('🧪 Testing SCIM user creation with password...');
-        const accessToken = await getAccessToken();
+        console.log('🧪 Testing comprehensive SCIM2 user creation with retry logic...');
         
-        const testUser = {
-            schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
-            userName: 'test-scim-password@example.com',
-            password: 'TempPass123!@#', // Required by Asgardeo
-            name: {
-                givenName: 'Test',
-                familyName: 'SCIM',
-                formatted: 'Test SCIM'
-            },
-            emails: [{ 
-                primary: true, 
-                value: 'test-scim-password@example.com', 
-                type: 'work' 
-            }],
+        const testUserDetails = {
+            email: 'comprehensive-test@example.com',
+            firstName: 'Comprehensive',
+            lastName: 'Test',
+            password: 'TempPass123!@#',
             active: true
         };
         
-        console.log('📋 SCIM User data with password:', JSON.stringify(testUser, null, 2));
+        const options = {
+            waitForCreation: true,
+            checkMultipleTimes: true
+        };
+        
+        const result = await createUserViaSCIM2(testUserDetails, options);
+        
+        res.json({
+            testType: 'Comprehensive SCIM2 Creation with Retry Logic',
+            timestamp: new Date().toISOString(),
+            ...result
+        });
+        
+    } catch (error) {
+        console.error('❌ Comprehensive SCIM2 test failed:', error);
+        res.status(500).json({
+            testType: 'Comprehensive SCIM2 Creation',
+            success: false,
+            error: 'Test failed',
+            details: error.message
+        });
+    }
+});
+
+// Test SCIM user creation with comprehensive payload for Asgardeo
+app.post('/test-scim-create', async (req, res) => {
+    try {
+        console.log('🧪 Testing comprehensive SCIM2 user creation...');
+        const accessToken = await getAccessToken();
+        
+        const testUser = {
+            schemas: [
+                "urn:ietf:params:scim:schemas:core:2.0:User",
+                "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"
+            ],
+            userName: 'test-comprehensive-scim@example.com',
+            password: 'TempPass123!@#', // Required by Asgardeo
+            name: {
+                givenName: 'Test',
+                familyName: 'Comprehensive',
+                formatted: 'Test Comprehensive'
+            },
+            emails: [{ 
+                primary: true, 
+                value: 'test-comprehensive-scim@example.com', 
+                type: 'work' 
+            }],
+            active: true,
+            // Comprehensive enterprise schema for Asgardeo compatibility
+            "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": {
+                "askPassword": false,           // Don't require password change on first login
+                "verifyEmail": false,          // Don't require email verification
+                "accountLocked": false,        // Ensure account is not locked
+                "accountDisabled": false,      // Ensure account is enabled
+                "passwordResetRequired": false // Don't force password reset
+            }
+        };
+        
+        console.log('📋 Comprehensive SCIM2 User data:', JSON.stringify(testUser, null, 2));
         
         const createResponse = await axios.post(SCIM_BASE_URL, testUser, {
             headers: {
@@ -216,22 +418,110 @@ app.post('/test-scim-create', async (req, res) => {
             },
         });
         
-        console.log('✅ SCIM Create Response Status:', createResponse.status);
-        console.log('✅ SCIM Create Response Data:', JSON.stringify(createResponse.data, null, 2));
+        console.log('✅ SCIM2 Create Response Status:', createResponse.status);
+        console.log('✅ SCIM2 Create Response Data:', JSON.stringify(createResponse.data, null, 2));
+        
+        // Wait a moment for potential async processing
+        console.log('⏳ Waiting 2 seconds for user processing...');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Comprehensive verification with multiple search methods
+        console.log('🔍 Performing comprehensive user verification...');
+        
+        // Method 1: Search by userName
+        const verifyByUserName = await axios.get(`${SCIM_BASE_URL}?filter=userName eq "${testUser.userName}"`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        // Method 2: Search by email
+        const verifyByEmail = await axios.get(`${SCIM_BASE_URL}?filter=emails.value eq "${testUser.emails[0].value}"`, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        // Method 3: If we got an ID from creation, try to fetch directly
+        let verifyById = null;
+        if (createResponse.data && createResponse.data.id) {
+            try {
+                verifyById = await axios.get(`${SCIM_BASE_URL}/${createResponse.data.id}`, {
+                    headers: { 'Authorization': `Bearer ${accessToken}` }
+                });
+            } catch (idError) {
+                console.log('⚠️ Direct ID lookup failed:', idError.response?.status);
+            }
+        }
+        
+        const userExistsByUserName = verifyByUserName.data.totalResults > 0;
+        const userExistsByEmail = verifyByEmail.data.totalResults > 0;
+        const userExistsById = verifyById !== null;
+        
+        console.log(`📊 Verification Results:`);
+        console.log(`   - By userName: ${userExistsByUserName ? 'FOUND' : 'NOT FOUND'}`);
+        console.log(`   - By email: ${userExistsByEmail ? 'FOUND' : 'NOT FOUND'}`);
+        console.log(`   - By ID: ${userExistsById ? 'FOUND' : 'NOT FOUND'}`);
+        
+        const userExists = userExistsByUserName || userExistsByEmail || userExistsById;
+        const userData = userExistsByUserName ? verifyByUserName.data.Resources[0] : 
+                        userExistsByEmail ? verifyByEmail.data.Resources[0] : 
+                        userExistsById ? verifyById.data : null;
         
         res.json({
             success: true,
-            method: 'SCIM with password',
-            response: createResponse.data,
+            method: 'Comprehensive SCIM2 with enterprise schema',
+            createResponse: createResponse.data,
             status: createResponse.status,
-            message: 'User created successfully with temporary password'
+            verification: {
+                userExists: userExists,
+                methods: {
+                    byUserName: { found: userExistsByUserName, results: verifyByUserName.data.totalResults },
+                    byEmail: { found: userExistsByEmail, results: verifyByEmail.data.totalResults },
+                    byId: { found: userExistsById, available: createResponse.data?.id !== undefined }
+                },
+                userData: userData
+            },
+            message: userExists ? 'User created and verified successfully!' : 'User creation accepted but not found in any search method'
         });
         
     } catch (error) {
-        console.error('❌ SCIM create test failed:', error.response?.data);
+        console.error('❌ Comprehensive SCIM2 create test failed:', error.response?.data);
         res.status(error.response?.status || 500).json({
             success: false,
-            error: 'SCIM create test failed',
+            error: 'Comprehensive SCIM2 create test failed',
+            details: error.response?.data,
+            status: error.response?.status
+        });
+    }
+});
+
+// Check if a specific user exists in Asgardeo
+app.get('/check-user/:email', async (req, res) => {
+    try {
+        const userEmail = req.params.email;
+        console.log(`🔍 Checking if user exists: ${userEmail}`);
+        
+        const accessToken = await getAccessToken();
+        const searchUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
+        
+        const searchResponse = await axios.get(searchUrl, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        
+        const userExists = searchResponse.data.totalResults > 0;
+        const userData = userExists ? searchResponse.data.Resources[0] : null;
+        
+        console.log(`📊 User check result: ${userExists ? 'FOUND' : 'NOT FOUND'}`);
+        
+        res.json({
+            email: userEmail,
+            exists: userExists,
+            totalResults: searchResponse.data.totalResults,
+            user: userData,
+            searchUrl: searchUrl
+        });
+        
+    } catch (error) {
+        console.error('❌ User check failed:', error.response?.data);
+        res.status(error.response?.status || 500).json({
+            error: 'User check failed',
             details: error.response?.data,
             status: error.response?.status
         });
@@ -378,52 +668,38 @@ app.post('/webhook-receiver', async (req, res) => {
                 } catch (createError) {
                     console.error('❌ User invite failed:', createError.response?.data);
                     
-                    // If invite fails, try the old SCIM method as backup
-                    console.log('🔄 Falling back to SCIM creation...');
+                    // If invite fails, use comprehensive SCIM2 creation as backup
+                    console.log('🔄 Falling back to comprehensive SCIM2 creation...');
                     
-                    try {
-                        const scimUserFallback = {
-                            schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
-                            userName: userEmail,
-                            password: "TempPass123!@#", // Required by Asgardeo - user will change via invite
-                            name: {
-                                givenName: body.first_name ? body.first_name.trim() : '',
-                                familyName: body.last_name ? body.last_name.trim() : '',
-                                formatted: `${body.first_name ? body.first_name.trim() : ''} ${body.last_name ? body.last_name.trim() : ''}`.trim()
-                            },
-                            emails: [{ 
-                                primary: true, 
-                                value: userEmail, 
-                                type: 'work' 
-                            }],
-                            active: body.status === 'Active'
-                        };
-                        
-                        console.log('📋 SCIM User data being sent:', JSON.stringify(scimUserFallback, null, 2));
-                        
-                        const createResponse = await axios.post(SCIM_BASE_URL, scimUserFallback, {
-                            headers: {
-                                'Authorization': `Bearer ${accessToken}`,
-                                'Content-Type': 'application/json',
-                            },
+                    const userDetails = {
+                        email: userEmail,
+                        firstName: body.first_name ? body.first_name.trim() : '',
+                        lastName: body.last_name ? body.last_name.trim() : '',
+                        password: 'TempPass123!@#',
+                        active: body.status === 'Active'
+                    };
+                    
+                    const options = {
+                        waitForCreation: true,
+                        checkMultipleTimes: true
+                    };
+                    
+                    const scimResult = await createUserViaSCIM2(userDetails, options);
+                    
+                    if (scimResult.success) {
+                        return res.status(201).json({
+                            message: `User ${userEmail} created successfully via comprehensive SCIM2`,
+                            method: 'Comprehensive SCIM2 (fallback from Invite API)',
+                            user: scimResult.user,
+                            verification: scimResult.verification
                         });
-                        
-                        console.log('✅ SCIM Create Response Status:', createResponse.status);
-                        console.log('✅ SCIM Create Response Data:', JSON.stringify(createResponse.data, null, 2));
-                        
-                        return res.status(202).json({ 
-                            message: 'User creation attempted with SCIM (fallback)',
-                            primary_method_failed: 'Invite API',
-                            fallback_used: 'SCIM API',
-                            status: createResponse.status,
-                            note: 'Check Asgardeo Console for user status'
-                        });
-                    } catch (scimError) {
-                        console.error('❌ Error in fallback SCIM creation:', scimError.response?.data);
-                        return res.status(500).json({ 
-                            error: 'Both Invite API and SCIM creation failed', 
-                            inviteError: createError.response?.data,
-                            scimError: scimError.response?.data
+                    } else {
+                        return res.status(202).json({
+                            message: `User creation request processed but verification failed`,
+                            method: 'Comprehensive SCIM2 (fallback from Invite API)',
+                            details: scimResult.message,
+                            possibleCauses: scimResult.verification?.possibleCauses || [],
+                            troubleshooting: scimResult.troubleshooting
                         });
                     }
                 }
