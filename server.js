@@ -348,7 +348,7 @@ app.post('/webhook-receiver', async (req, res) => {
         const userId = userExists ? searchResp.data.Resources[0].id : null;
 
         if (eventType === 'on_update') {
-            // Map Frappe HR fields to SCIM 2.0 with all required fields
+            // Map Frappe HR fields to SCIM 2.0 - Asgardeo specific format
             const scimUser = {
                 schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
                 userName: userEmail,
@@ -362,9 +362,9 @@ app.post('/webhook-receiver', async (req, res) => {
                     value: userEmail, 
                     type: 'work' 
                 }],
-                active: body.status === 'Active',
-                password: 'TempPassword123!', // Temporary password - user should change on first login
-                groups: []
+                active: body.status === 'Active'
+                // Note: Password removed - Asgardeo likely doesn't allow password via SCIM
+                // Note: Groups removed - might be causing validation issues
             };
             if (!userExists) {
                 // Create user
@@ -382,7 +382,44 @@ app.post('/webhook-receiver', async (req, res) => {
                     console.log('✅ SCIM Create Response Status:', createResponse.status);
                     console.log('✅ SCIM Create Response Data:', JSON.stringify(createResponse.data, null, 2));
                     
-                    // Immediately verify the user was actually created
+                    // Handle different response codes
+                    if (createResponse.status === 202) {
+                        console.log('⚠️ Status 202: Request accepted but processing asynchronously');
+                        console.log('💡 This usually means validation failed or async processing');
+                        
+                        // Wait a moment and try verification multiple times
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            console.log(`🔍 Verification attempt ${attempt}/3...`);
+                            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+                            
+                            const verifyUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
+                            const verifyResponse = await axios.get(verifyUrl, {
+                                headers: { 'Authorization': `Bearer ${accessToken}` }
+                            });
+                            
+                            console.log(`📊 Verification attempt ${attempt}: ${verifyResponse.data.totalResults} users found`);
+                            
+                            if (verifyResponse.data.totalResults > 0) {
+                                console.log('✅ User verified in SCIM after delay:', verifyResponse.data.Resources[0].id);
+                                return res.status(201).json({ 
+                                    message: 'User created (verified after delay)',
+                                    scimId: verifyResponse.data.Resources[0].id,
+                                    verified: true,
+                                    attempts: attempt
+                                });
+                            }
+                        }
+                        
+                        // If still not found after 3 attempts
+                        console.error('❌ User still not found after 3 verification attempts');
+                        return res.status(202).json({ 
+                            message: 'User creation queued but not yet processed',
+                            status: 'pending',
+                            suggestion: 'Check Asgardeo Console manually - user might appear later'
+                        });
+                    }
+                    
+                    // Immediately verify the user was actually created for non-202 responses
                     console.log('🔍 Verifying user creation...');
                     const verifyUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
                     const verifyResponse = await axios.get(verifyUrl, {
