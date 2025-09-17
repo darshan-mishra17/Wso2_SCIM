@@ -348,15 +348,23 @@ app.post('/webhook-receiver', async (req, res) => {
         const userId = userExists ? searchResp.data.Resources[0].id : null;
 
         if (eventType === 'on_update') {
-            // Map Frappe HR fields to SCIM 2.0
+            // Map Frappe HR fields to SCIM 2.0 with all required fields
             const scimUser = {
-                userName: body.user_id,
+                schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                userName: userEmail,
                 name: {
-                    givenName: body.first_name || '',
-                    familyName: body.last_name || '',
+                    givenName: body.first_name ? body.first_name.trim() : '',
+                    familyName: body.last_name ? body.last_name.trim() : '',
+                    formatted: `${body.first_name ? body.first_name.trim() : ''} ${body.last_name ? body.last_name.trim() : ''}`.trim()
                 },
-                emails: [{ primary: true, value: body.user_id, type: 'work' }],
+                emails: [{ 
+                    primary: true, 
+                    value: userEmail, 
+                    type: 'work' 
+                }],
                 active: body.status === 'Active',
+                password: 'TempPassword123!', // Temporary password - user should change on first login
+                groups: []
             };
             if (!userExists) {
                 // Create user
