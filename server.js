@@ -274,28 +274,46 @@ app.post('/webhook-receiver', async (req, res) => {
         return res.status(400).json({ error: 'Missing x-frappe-event-type header' });
     }
     
-    // Enhanced validation for user_id
-    if (!body || !body.user_id || body.user_id === 'None' || body.user_id === null || body.user_id === '') {
-        console.error('❌ Invalid user_id:', body?.user_id);
-        return res.status(400).json({ 
-            error: 'Invalid or missing user_id in request body',
-            received: body?.user_id,
-            suggestion: 'Ensure the Employee record has a valid email address linked'
-        });
+    // Enhanced validation and email extraction
+    let userEmail = null;
+    
+    // Try multiple fields for email address
+    if (body.user_id && body.user_id !== 'None' && body.user_id !== null && body.user_id !== '') {
+        userEmail = body.user_id;
+    } else if (body.company_email && body.company_email !== 'None') {
+        userEmail = body.company_email;
+    } else if (body.personal_email && body.personal_email !== 'None') {
+        userEmail = body.personal_email;
+    } else if (body.email && body.email !== 'None') {
+        userEmail = body.email;
     }
     
-    const userEmail = body.user_id;
+    if (!userEmail) {
+        console.error('❌ No valid email found in webhook data:', {
+            user_id: body?.user_id,
+            company_email: body?.company_email,
+            personal_email: body?.personal_email,
+            email: body?.email
+        });
+        return res.status(400).json({ 
+            error: 'No valid email address found in webhook data',
+            receivedFields: Object.keys(body || {}),
+            suggestion: 'Ensure Employee record has email in user_id, company_email, or personal_email field'
+        });
+    }
     
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(userEmail)) {
         console.error('❌ Invalid email format:', userEmail);
         return res.status(400).json({ 
-            error: 'Invalid email format for user_id',
+            error: 'Invalid email format',
             received: userEmail,
-            suggestion: 'user_id must be a valid email address'
+            suggestion: 'Email must be in valid format (user@domain.com)'
         });
     }
+    
+    console.log('✅ Using email:', userEmail);
     try {
         const accessToken = await getAccessToken();
         
