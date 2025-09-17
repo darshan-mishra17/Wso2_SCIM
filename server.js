@@ -362,19 +362,44 @@ app.post('/webhook-receiver', async (req, res) => {
                 // Create user
                 try {
                     console.log(`➕ Creating new user: ${userEmail}`);
-                    await axios.post(SCIM_BASE_URL, scimUser, {
+                    console.log('📋 SCIM User data being sent:', JSON.stringify(scimUser, null, 2));
+                    
+                    const createResponse = await axios.post(SCIM_BASE_URL, scimUser, {
                         headers: {
                             'Authorization': `Bearer ${accessToken}`,
                             'Content-Type': 'application/json',
                         },
                     });
+                    
+                    console.log('✅ SCIM Create Response Status:', createResponse.status);
+                    console.log('✅ SCIM Create Response Data:', JSON.stringify(createResponse.data, null, 2));
+                    
+                    // Immediately verify the user was actually created
+                    console.log('🔍 Verifying user creation...');
+                    const verifyUrl = `${SCIM_BASE_URL}?filter=userName eq \"${userEmail}\"`;
+                    const verifyResponse = await axios.get(verifyUrl, {
+                        headers: { 'Authorization': `Bearer ${accessToken}` }
+                    });
+                    
+                    console.log('📊 Verification result:', verifyResponse.data.totalResults, 'users found');
+                    if (verifyResponse.data.totalResults > 0) {
+                        console.log('✅ User verified in SCIM:', verifyResponse.data.Resources[0].id);
+                    } else {
+                        console.error('❌ User NOT found after creation!');
+                    }
+                    
                     console.log(`✅ User created successfully: ${userEmail}`);
-                    return res.status(201).json({ message: 'User created' });
+                    return res.status(201).json({ 
+                        message: 'User created',
+                        scimId: createResponse.data.id,
+                        verified: verifyResponse.data.totalResults > 0
+                    });
                 } catch (err) {
                     console.error('❌ Error creating user:');
                     console.error('Status:', err.response?.status);
                     console.error('Status Text:', err.response?.statusText);
-                    console.error('Response:', err.response?.data);
+                    console.error('Response:', JSON.stringify(err.response?.data, null, 2));
+                    console.error('Full Error:', err.message);
                     
                     if (err.response?.status === 403) {
                         return res.status(403).json({ 
@@ -383,7 +408,11 @@ app.post('/webhook-receiver', async (req, res) => {
                         });
                     }
                     
-                    return res.status(500).json({ error: 'Failed to create user', details: err.response?.data });
+                    return res.status(500).json({ 
+                        error: 'Failed to create user', 
+                        details: err.response?.data,
+                        scimUserData: scimUser
+                    });
                 }
             } else {
                 // Update user via SCIM PATCH
