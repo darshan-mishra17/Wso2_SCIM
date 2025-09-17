@@ -184,6 +184,60 @@ app.post('/test-invite-user', async (req, res) => {
     }
 });
 
+// Test SCIM user creation with password (required by Asgardeo)
+app.post('/test-scim-create', async (req, res) => {
+    try {
+        console.log('🧪 Testing SCIM user creation with password...');
+        const accessToken = await getAccessToken();
+        
+        const testUser = {
+            schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            userName: 'test-scim-password@example.com',
+            password: 'TempPass123!@#', // Required by Asgardeo
+            name: {
+                givenName: 'Test',
+                familyName: 'SCIM',
+                formatted: 'Test SCIM'
+            },
+            emails: [{ 
+                primary: true, 
+                value: 'test-scim-password@example.com', 
+                type: 'work' 
+            }],
+            active: true
+        };
+        
+        console.log('📋 SCIM User data with password:', JSON.stringify(testUser, null, 2));
+        
+        const createResponse = await axios.post(SCIM_BASE_URL, testUser, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        
+        console.log('✅ SCIM Create Response Status:', createResponse.status);
+        console.log('✅ SCIM Create Response Data:', JSON.stringify(createResponse.data, null, 2));
+        
+        res.json({
+            success: true,
+            method: 'SCIM with password',
+            response: createResponse.data,
+            status: createResponse.status,
+            message: 'User created successfully with temporary password'
+        });
+        
+    } catch (error) {
+        console.error('❌ SCIM create test failed:', error.response?.data);
+        res.status(error.response?.status || 500).json({
+            success: false,
+            error: 'SCIM create test failed',
+            details: error.response?.data,
+            status: error.response?.status
+        });
+    }
+});
+
 // 2. Webhook endpoint for Frappe HR events
 app.post('/webhook-receiver', async (req, res) => {
     const eventType = req.header('x-frappe-event-type');
@@ -331,6 +385,7 @@ app.post('/webhook-receiver', async (req, res) => {
                         const scimUserFallback = {
                             schemas: ["urn:ietf:params:scim:schemas:core:2.0:User"],
                             userName: userEmail,
+                            password: "TempPass123!@#", // Required by Asgardeo - user will change via invite
                             name: {
                                 givenName: body.first_name ? body.first_name.trim() : '',
                                 familyName: body.last_name ? body.last_name.trim() : '',
